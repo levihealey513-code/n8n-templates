@@ -1,0 +1,443 @@
+{
+  "name": "Missed Call → Instant Text Back",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Missed Call → Instant Text Back\n\n**What it does:**\nWhen a call is missed on your GHL phone number, GHL fires a webhook to this workflow. It checks if the call was during business hours (8am–8pm EST), sends the appropriate SMS via GHL API, moves the contact to \"Attempted Contact\" pipeline stage, waits 30 minutes, then sends you an internal follow-up reminder email.\n\n**Credentials to configure:**\n1. **GHL API Key** — Settings → Business Profile → API Key\n2. **SMTP Email** — For internal notification emails\n\n**Setup steps:**\n1. Import this workflow and activate it to get the webhook URL\n2. In GHL → Settings → Phone Numbers → your number → Missed Call Webhook: paste the webhook URL\n3. Replace `{{GHL_API_KEY}}` in all HTTP Request nodes\n4. Replace `{{GHL_PIPELINE_ID}}` and `{{GHL_ATTEMPTED_CONTACT_STAGE_ID}}` with actual IDs\n5. Configure SMTP credentials in n8n\n6. Test by calling your GHL number and not answering\n\n**Business hours logic:**\n- Uses America/New_York timezone (EST/EDT)\n- Business hours: 8:00 AM – 8:00 PM\n- After hours: 8:00 PM – 8:00 AM\n- Different SMS templates for each",
+        "height": 480,
+        "width": 420,
+        "color": 4
+      },
+      "id": "notes-node",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [40, 40]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "missed-call",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "GHL Missed Call Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [520, 300],
+      "webhookId": "missed-call"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\":\"received\"}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [740, 160]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "field-contact-id",
+              "name": "contactId",
+              "value": "={{ $json.body.contactId }}",
+              "type": "string"
+            },
+            {
+              "id": "field-contact-phone",
+              "name": "contactPhone",
+              "value": "={{ $json.body.contactPhone || $json.body.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "field-contact-name",
+              "name": "contactName",
+              "value": "={{ $json.body.contactName || $json.body.firstName || 'there' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-missed-time",
+              "name": "missedCallTime",
+              "value": "={{ $json.body.missedCallTime || new Date().toISOString() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-call-data",
+      "name": "Set Call Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [740, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if missed call was during business hours (8am-8pm EST)\nconst callTime = $input.first().json.missedCallTime;\nconst callDate = new Date(callTime);\n\n// Convert to EST/EDT\nconst estOptions = { timeZone: 'America/New_York', hour: 'numeric', hour12: false };\nconst estHour = parseInt(new Intl.DateTimeFormat('en-US', estOptions).format(callDate));\n\nconst isBusinessHours = estHour >= 8 && estHour < 20; // 8am to 8pm\n\nconst formattedTime = new Intl.DateTimeFormat('en-US', {\n  timeZone: 'America/New_York',\n  hour: 'numeric',\n  minute: '2-digit',\n  hour12: true\n}).format(callDate);\n\nreturn [{\n  json: {\n    ...($input.first().json),\n    isBusinessHours,\n    estHour,\n    formattedTime\n  }\n}];"
+      },
+      "id": "check-business-hours",
+      "name": "Check Business Hours",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-biz-hours",
+              "leftValue": "={{ $json.isBusinessHours }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-business-hours",
+      "name": "Business Hours?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1180, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://rest.gohighlevel.com/v1/contacts/{{ $('Set Call Data').item.json.contactId }}/messages/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"SMS\",\n  \"message\": \"Hey {{ $('Set Call Data').item.json.contactName }}! Sorry I missed your call — I'm with a client right now. I'll call you back within 30 minutes. Or grab a time here: calendly.com/localvex – Levi, LocalVex\"\n}",
+        "options": {}
+      },
+      "id": "sms-business-hours",
+      "name": "SMS — Business Hours",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1420, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://rest.gohighlevel.com/v1/contacts/{{ $('Set Call Data').item.json.contactId }}/messages/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"SMS\",\n  \"message\": \"Hey {{ $('Set Call Data').item.json.contactName }}! Saw your call — I'll reach out first thing tomorrow morning. Or book a time that works for you: calendly.com/localvex – Levi, LocalVex\"\n}",
+        "options": {}
+      },
+      "id": "sms-after-hours",
+      "name": "SMS — After Hours",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1420, 460]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://rest.gohighlevel.com/v1/pipelines/{{GHL_PIPELINE_ID}}/opportunities/{{ $('Set Call Data').item.json.contactId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"stageId\": \"{{GHL_ATTEMPTED_CONTACT_STAGE_ID}}\"\n}",
+        "options": {}
+      },
+      "id": "move-pipeline-stage-biz",
+      "name": "Move to Attempted Contact (Biz)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 220]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://rest.gohighlevel.com/v1/pipelines/{{GHL_PIPELINE_ID}}/opportunities/{{ $('Set Call Data').item.json.contactId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"stageId\": \"{{GHL_ATTEMPTED_CONTACT_STAGE_ID}}\"\n}",
+        "options": {}
+      },
+      "id": "move-pipeline-stage-after",
+      "name": "Move to Attempted Contact (After)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 460]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "minutes"
+      },
+      "id": "wait-30-min-biz",
+      "name": "Wait 30 Min (Biz)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1880, 220]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "minutes"
+      },
+      "id": "wait-30-min-after",
+      "name": "Wait 30 Min (After)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1880, 460]
+    },
+    {
+      "parameters": {
+        "sendTo": "levihealey96@gmail.com",
+        "subject": "=📞 Missed Call Follow-Up: {{ $('Set Call Data').item.json.contactName }}",
+        "emailType": "html",
+        "html": "=<div style=\"font-family:'Helvetica Neue',Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#0a0f1e;\">\n<h2 style=\"color:#0057FF;\">📞 Missed Call — Follow Up Now</h2>\n<table style=\"border-collapse:collapse;width:100%;margin:16px 0;\">\n<tr><td style=\"padding:8px 12px;border:1px solid #eee;font-weight:bold;\">Name</td><td style=\"padding:8px 12px;border:1px solid #eee;\">{{ $('Set Call Data').item.json.contactName }}</td></tr>\n<tr><td style=\"padding:8px 12px;border:1px solid #eee;font-weight:bold;\">Phone</td><td style=\"padding:8px 12px;border:1px solid #eee;\"><a href=\"tel:{{ $('Set Call Data').item.json.contactPhone }}\">{{ $('Set Call Data').item.json.contactPhone }}</a></td></tr>\n<tr><td style=\"padding:8px 12px;border:1px solid #eee;font-weight:bold;\">Call Time</td><td style=\"padding:8px 12px;border:1px solid #eee;\">{{ $('Check Business Hours').item.json.formattedTime }} EST</td></tr>\n<tr><td style=\"padding:8px 12px;border:1px solid #eee;font-weight:bold;\">Auto-text sent</td><td style=\"padding:8px 12px;border:1px solid #eee;\">✅ Yes ({{ $('Check Business Hours').item.json.isBusinessHours ? 'Business hours' : 'After hours' }} template)</td></tr>\n</table>\n<p style=\"color:#e74c3c;font-weight:700;\">⏰ 30 minutes have passed — follow up now!</p>\n</div>",
+        "options": {}
+      },
+      "id": "reminder-email-biz",
+      "name": "Follow-Up Reminder (Biz)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2100, 220],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "levihealey96@gmail.com",
+        "subject": "=📞 Missed Call Follow-Up: {{ $('Set Call Data').item.json.contactName }}",
+        "emailType": "html",
+        "html": "=<div style=\"font-family:'Helvetica Neue',Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#0a0f1e;\">\n<h2 style=\"color:#0057FF;\">📞 Missed Call — Follow Up Now</h2>\n<table style=\"border-collapse:collapse;width:100%;margin:16px 0;\">\n<tr><td style=\"padding:8px 12px;border:1px solid #eee;font-weight:bold;\">Name</td><td style=\"padding:8px 12px;border:1px solid #eee;\">{{ $('Set Call Data').item.json.contactName }}</td></tr>\n<tr><td style=\"padding:8px 12px;border:1px solid #eee;font-weight:bold;\">Phone</td><td style=\"padding:8px 12px;border:1px solid #eee;\"><a href=\"tel:{{ $('Set Call Data').item.json.contactPhone }}\">{{ $('Set Call Data').item.json.contactPhone }}</a></td></tr>\n<tr><td style=\"padding:8px 12px;border:1px solid #eee;font-weight:bold;\">Call Time</td><td style=\"padding:8px 12px;border:1px solid #eee;\">{{ $('Check Business Hours').item.json.formattedTime }} EST</td></tr>\n<tr><td style=\"padding:8px 12px;border:1px solid #eee;font-weight:bold;\">Auto-text sent</td><td style=\"padding:8px 12px;border:1px solid #eee;\">✅ Yes (After hours template)</td></tr>\n</table>\n<p style=\"color:#e74c3c;font-weight:700;\">⏰ 30 minutes have passed — follow up first thing tomorrow!</p>\n</div>",
+        "options": {}
+      },
+      "id": "reminder-email-after",
+      "name": "Follow-Up Reminder (After)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2100, 460],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "GHL Missed Call Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set Call Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Call Data": {
+      "main": [
+        [
+          {
+            "node": "Check Business Hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Business Hours": {
+      "main": [
+        [
+          {
+            "node": "Business Hours?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Business Hours?": {
+      "main": [
+        [
+          {
+            "node": "SMS — Business Hours",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SMS — After Hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SMS — Business Hours": {
+      "main": [
+        [
+          {
+            "node": "Move to Attempted Contact (Biz)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SMS — After Hours": {
+      "main": [
+        [
+          {
+            "node": "Move to Attempted Contact (After)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move to Attempted Contact (Biz)": {
+      "main": [
+        [
+          {
+            "node": "Wait 30 Min (Biz)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move to Attempted Contact (After)": {
+      "main": [
+        [
+          {
+            "node": "Wait 30 Min (After)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 30 Min (Biz)": {
+      "main": [
+        [
+          {
+            "node": "Follow-Up Reminder (Biz)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 30 Min (After)": {
+      "main": [
+        [
+          {
+            "node": "Follow-Up Reminder (After)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "localvex",
+      "id": "tag-localvex"
+    },
+    {
+      "name": "missed-call",
+      "id": "tag-missed-call"
+    },
+    {
+      "name": "sms",
+      "id": "tag-sms"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-17T00:00:00.000Z",
+  "versionId": "1"
+}
