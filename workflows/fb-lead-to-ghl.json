@@ -1,0 +1,328 @@
+{
+  "name": "FB Lead → GoHighLevel Contact",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## FB Lead → GoHighLevel Contact\n\n**What it does:**\nReceives Facebook Lead Ad submissions via webhook, creates a contact in GoHighLevel, adds them to the sales pipeline, and sends an instant SMS.\n\n**Credentials to configure:**\n1. **GHL API Key** — Go to GHL → Settings → Business Profile → API Key. Paste into the HTTP Request nodes' Authorization header.\n2. **Facebook Webhook** — In Facebook Developer Portal, create a webhook subscription for your Lead Ad form. Point the callback URL to this workflow's webhook URL.\n\n**Setup steps:**\n1. Import this workflow into n8n\n2. Activate the workflow to get the webhook URL\n3. In Facebook Developer Portal → Webhooks, add the webhook URL\n4. Verify the webhook (Facebook sends a GET verification challenge — n8n handles this automatically)\n5. Replace `{{GHL_API_KEY}}` in all HTTP Request nodes with your actual key, or use n8n credential store\n6. Replace `{{GHL_PIPELINE_ID}}` and `{{GHL_STAGE_ID}}` with your actual pipeline/stage IDs from GHL\n7. Update the alert email address if different from levihealey96@gmail.com\n8. Test by submitting a test lead from Facebook Ads Manager",
+        "height": 460,
+        "width": 420,
+        "color": 4
+      },
+      "id": "notes-node",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [40, 40]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fb-lead-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Facebook Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [520, 300],
+      "webhookId": "fb-lead-webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "field-first-name",
+              "name": "firstName",
+              "value": "={{ $json.body.first_name || $json.body.full_name?.split(' ')[0] || 'Friend' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-last-name",
+              "name": "lastName",
+              "value": "={{ $json.body.last_name || $json.body.full_name?.split(' ').slice(1).join(' ') || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-email",
+              "name": "email",
+              "value": "={{ $json.body.email }}",
+              "type": "string"
+            },
+            {
+              "id": "field-phone",
+              "name": "phone",
+              "value": "={{ $json.body.phone_number || $json.body.phone || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-form-name",
+              "name": "formName",
+              "value": "={{ $json.body.form_name || 'Unknown Form' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-campaign",
+              "name": "campaignName",
+              "value": "={{ $json.body.campaign_name || $json.body.ad_name || 'facebook' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "parse-lead-data",
+      "name": "Parse Lead Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://rest.gohighlevel.com/v1/contacts/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"firstName\": \"{{ $json.firstName }}\",\n  \"lastName\": \"{{ $json.lastName }}\",\n  \"email\": \"{{ $json.email }}\",\n  \"phone\": \"{{ $json.phone }}\",\n  \"tags\": [\"fb-lead\", \"{{ $json.campaignName }}\"],\n  \"source\": \"Facebook Lead Ad\"\n}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "create-ghl-contact",
+      "name": "Create GHL Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-status",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-contact-created",
+      "name": "Contact Created?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://rest.gohighlevel.com/v1/pipelines/{{GHL_PIPELINE_ID}}/opportunities/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"title\": \"{{ $('Parse Lead Data').item.json.firstName }} {{ $('Parse Lead Data').item.json.lastName }} — FB Lead\",\n  \"stageId\": \"{{GHL_STAGE_ID}}\",\n  \"contactId\": \"{{ $json.body?.contact?.id || $json.data?.id || '' }}\",\n  \"status\": \"open\",\n  \"source\": \"Facebook Lead Ad\"\n}",
+        "options": {}
+      },
+      "id": "add-to-pipeline",
+      "name": "Add to Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://rest.gohighlevel.com/v1/contacts/{{ $('Create GHL Contact').item.json.body?.contact?.id || $('Create GHL Contact').item.json.data?.id }}/messages/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"SMS\",\n  \"message\": \"Hey {{ $('Parse Lead Data').item.json.firstName }}! Thanks for reaching out to LocalVex. I'll be in touch within 15 minutes. – Levi\"\n}",
+        "options": {}
+      },
+      "id": "send-sms",
+      "name": "Send SMS via GHL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1880, 200]
+    },
+    {
+      "parameters": {
+        "sendTo": "levihealey96@gmail.com",
+        "subject": "=⚠️ FAILED: FB Lead Import — {{ $('Parse Lead Data').item.json.firstName }} {{ $('Parse Lead Data').item.json.lastName }}",
+        "emailType": "html",
+        "html": "=<h2>Facebook Lead Import Failed</h2>\n<p>A Facebook lead could not be added to GoHighLevel. Please add manually.</p>\n<table style=\"border-collapse:collapse;width:100%;font-family:sans-serif;\">\n<tr><td style=\"padding:8px;border:1px solid #ddd;font-weight:bold;\">Name</td><td style=\"padding:8px;border:1px solid #ddd;\">{{ $('Parse Lead Data').item.json.firstName }} {{ $('Parse Lead Data').item.json.lastName }}</td></tr>\n<tr><td style=\"padding:8px;border:1px solid #ddd;font-weight:bold;\">Email</td><td style=\"padding:8px;border:1px solid #ddd;\">{{ $('Parse Lead Data').item.json.email }}</td></tr>\n<tr><td style=\"padding:8px;border:1px solid #ddd;font-weight:bold;\">Phone</td><td style=\"padding:8px;border:1px solid #ddd;\">{{ $('Parse Lead Data').item.json.phone }}</td></tr>\n<tr><td style=\"padding:8px;border:1px solid #ddd;font-weight:bold;\">Form</td><td style=\"padding:8px;border:1px solid #ddd;\">{{ $('Parse Lead Data').item.json.formName }}</td></tr>\n<tr><td style=\"padding:8px;border:1px solid #ddd;font-weight:bold;\">Campaign</td><td style=\"padding:8px;border:1px solid #ddd;\">{{ $('Parse Lead Data').item.json.campaignName }}</td></tr>\n</table>\n<p style=\"color:red;\">Error: Contact creation returned non-200 status.</p>",
+        "options": {}
+      },
+      "id": "alert-email",
+      "name": "Send Failure Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1640, 440],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Facebook Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Parse Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": []
+    },
+    "Parse Lead Data": {
+      "main": [
+        [
+          {
+            "node": "Create GHL Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create GHL Contact": {
+      "main": [
+        [
+          {
+            "node": "Contact Created?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contact Created?": {
+      "main": [
+        [
+          {
+            "node": "Add to Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Send SMS via GHL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "localvex",
+      "id": "tag-localvex"
+    },
+    {
+      "name": "lead-gen",
+      "id": "tag-lead-gen"
+    },
+    {
+      "name": "facebook",
+      "id": "tag-facebook"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-17T00:00:00.000Z",
+  "versionId": "1"
+}
