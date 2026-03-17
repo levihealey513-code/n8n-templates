@@ -1,0 +1,386 @@
+{
+  "name": "Review Request Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Review Request Automation\n\n**What it does:**\nWhen a contact is tagged \"service-complete\" in GHL, this workflow waits 2 hours, sends an SMS asking for a Google review, waits 2 days, sends a follow-up email if no review detected, tags the contact \"review-requested\", and logs everything to Google Sheets.\n\n**Credentials to configure:**\n1. **GHL API Key** — Settings → Business Profile → API Key\n2. **SMTP Email** — Gmail App Password or Mailgun SMTP\n3. **Google Sheets OAuth** — In n8n, go to Credentials → Google Sheets → OAuth2. You need a Google Cloud project with Sheets API enabled.\n\n**Setup steps:**\n1. Import this workflow and activate it to get the webhook URL\n2. In GHL → Automations → Create Workflow:\n   - Trigger: \"Contact Tag Added\" = \"service-complete\"\n   - Action: Webhook → POST to this workflow's URL\n   - Body: {contactId, firstName, phone, email, businessName, serviceDate}\n3. Replace `{{GHL_API_KEY}}` in all HTTP Request nodes\n4. Replace `{{GOOGLE_REVIEW_LINK_PLACEHOLDER}}` with your actual Google review link\n   - Get it from: Google Business Profile → Get more reviews → Copy link\n5. Create a Google Sheet named \"Review Requests\" with columns: Date, Name, Phone, Email, Status\n6. Replace `{{GOOGLE_SHEET_ID}}` with your actual Sheet ID\n7. Configure SMTP and Google Sheets credentials in n8n\n8. Test by manually tagging a test contact with \"service-complete\" in GHL",
+        "height": 520,
+        "width": 420,
+        "color": 4
+      },
+      "id": "notes-node",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [40, 40]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "review-request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Service Complete Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [520, 300],
+      "webhookId": "review-request"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\":\"received\"}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [740, 160]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "field-contact-id",
+              "name": "contactId",
+              "value": "={{ $json.body.contactId }}",
+              "type": "string"
+            },
+            {
+              "id": "field-first-name",
+              "name": "firstName",
+              "value": "={{ $json.body.firstName || 'there' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-phone",
+              "name": "phone",
+              "value": "={{ $json.body.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "field-email",
+              "name": "email",
+              "value": "={{ $json.body.email }}",
+              "type": "string"
+            },
+            {
+              "id": "field-business-name",
+              "name": "businessName",
+              "value": "={{ $json.body.businessName || 'LocalVex Media' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-service-date",
+              "name": "serviceDate",
+              "value": "={{ $json.body.serviceDate || new Date().toISOString().split('T')[0] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-contact-data",
+      "name": "Set Contact Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [740, 340]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "hours"
+      },
+      "id": "wait-2-hours",
+      "name": "Wait 2 Hours",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [960, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://rest.gohighlevel.com/v1/contacts/{{ $('Set Contact Data').item.json.contactId }}/messages/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"SMS\",\n  \"message\": \"Hey {{ $('Set Contact Data').item.json.firstName }}! Hope everything went well today. If you had a great experience, it would mean the world if you left us a quick Google review — takes 30 seconds: {{GOOGLE_REVIEW_LINK_PLACEHOLDER}} Thanks! – {{ $('Set Contact Data').item.json.businessName }}\"\n}",
+        "options": {}
+      },
+      "id": "send-sms-review",
+      "name": "SMS #1 — Review Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 340]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "days"
+      },
+      "id": "wait-2-days",
+      "name": "Wait 2 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1400, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-review-check",
+              "leftValue": "={{ false }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "review-left-check",
+      "name": "Review Left? (Placeholder)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1620, 340]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Set Contact Data').item.json.email }}",
+        "subject": "=One quick favor, {{ $('Set Contact Data').item.json.firstName }}?",
+        "emailType": "html",
+        "html": "=<div style=\"font-family:'Helvetica Neue',Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#0a0f1e;\">\n<p style=\"font-size:17px;line-height:1.7;\">Hi {{ $('Set Contact Data').item.json.firstName }},</p>\n<p style=\"font-size:17px;line-height:1.7;\">Just following up on your recent service with {{ $('Set Contact Data').item.json.businessName }}.</p>\n<p style=\"font-size:17px;line-height:1.7;\">We'd really appreciate a Google review — it helps other locals find us.</p>\n<p style=\"text-align:center;margin:30px 0;\">\n<a href=\"{{GOOGLE_REVIEW_LINK_PLACEHOLDER}}\" style=\"background:#0057FF;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:16px;\">Leave a Quick Review →</a>\n</p>\n<p style=\"font-size:17px;line-height:1.7;\">Thanks so much!</p>\n<p style=\"font-size:17px;line-height:1.7;\">– {{ $('Set Contact Data').item.json.businessName }} Team</p>\n</div>",
+        "options": {
+          "replyTo": "levihealey96@gmail.com"
+        }
+      },
+      "id": "send-email-review",
+      "name": "Email — Review Follow-Up",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1860, 440],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://rest.gohighlevel.com/v1/contacts/{{ $('Set Contact Data').item.json.contactId }}/tags/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"tags\": [\"review-requested\"]\n}",
+        "options": {}
+      },
+      "id": "tag-review-requested",
+      "name": "Tag Review Requested",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2100, 340]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "{{GOOGLE_SHEET_ID}}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ new Date().toISOString().split('T')[0] }}",
+            "Name": "={{ $('Set Contact Data').item.json.firstName }}",
+            "Phone": "={{ $('Set Contact Data').item.json.phone }}",
+            "Email": "={{ $('Set Contact Data').item.json.email }}",
+            "Status": "requested"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-to-sheets",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2320, 340],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Service Complete Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set Contact Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Contact Data": {
+      "main": [
+        [
+          {
+            "node": "Wait 2 Hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2 Hours": {
+      "main": [
+        [
+          {
+            "node": "SMS #1 — Review Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SMS #1 — Review Request": {
+      "main": [
+        [
+          {
+            "node": "Wait 2 Days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2 Days": {
+      "main": [
+        [
+          {
+            "node": "Review Left? (Placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Left? (Placeholder)": {
+      "main": [
+        [
+          {
+            "node": "Tag Review Requested",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email — Review Follow-Up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email — Review Follow-Up": {
+      "main": [
+        [
+          {
+            "node": "Tag Review Requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag Review Requested": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "localvex",
+      "id": "tag-localvex"
+    },
+    {
+      "name": "reviews",
+      "id": "tag-reviews"
+    },
+    {
+      "name": "reputation",
+      "id": "tag-reputation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-17T00:00:00.000Z",
+  "versionId": "1"
+}
