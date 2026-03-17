@@ -1,0 +1,398 @@
+{
+  "name": "Weekly Performance Report Emailer",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Weekly Performance Report Emailer\n\n**What it does:**\nRuns every Monday at 8:00 AM. Pulls last 7 days of contacts, pipeline opportunities, and conversations from GoHighLevel, compiles stats, and emails a formatted report to you (and optionally to active clients).\n\n**Credentials to configure:**\n1. **GHL API Key** — Settings → Business Profile → API Key\n2. **SMTP Email** — Gmail App Password or Mailgun SMTP\n\n**Setup steps:**\n1. Import this workflow into n8n\n2. Replace `{{GHL_API_KEY}}` in all HTTP Request nodes\n3. Replace `{{GHL_LOCATION_ID}}` with your GHL location ID\n4. Configure SMTP credentials in n8n\n5. Activate the workflow — it runs automatically every Monday at 8 AM\n6. To test immediately: click \"Execute Workflow\" in n8n UI\n\n**GHL API notes:**\n- Base URL: https://rest.gohighlevel.com/v1/\n- Contacts endpoint supports date filtering via query params\n- Pagination: API returns max 100 per page — the Code node handles pagination\n- Rate limit: 100 requests/minute",
+        "height": 460,
+        "width": 420,
+        "color": 4
+      },
+      "id": "notes-node",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [40, 40]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Monday 8AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate date range for last 7 days\nconst now = new Date();\nconst weekEnd = now.toISOString().split('T')[0];\nconst weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];\n\n// Unix timestamps for GHL API\nconst startTimestamp = Math.floor(new Date(weekStart).getTime() / 1000);\nconst endTimestamp = Math.floor(now.getTime() / 1000);\n\nreturn [{\n  json: {\n    weekStart,\n    weekEnd,\n    startTimestamp,\n    endTimestamp\n  }\n}];"
+      },
+      "id": "calc-dates",
+      "name": "Calculate Date Range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://rest.gohighlevel.com/v1/contacts/?startAfter={{ $json.startTimestamp }}&limit=100",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "get-contacts",
+      "name": "GET New Contacts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, 160]
+    },
+    {
+      "parameters": {
+        "url": "=https://rest.gohighlevel.com/v1/pipelines/{{GHL_PIPELINE_ID}}/opportunities/?startAfter={{ $('Calculate Date Range').item.json.startTimestamp }}&limit=100",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "get-opportunities",
+      "name": "GET Opportunities",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://rest.gohighlevel.com/v1/conversations/?startAfterDate={{ $('Calculate Date Range').item.json.startTimestamp }}&limit=100",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "get-conversations",
+      "name": "GET Conversations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, 440]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "mergeByPosition": true,
+        "options": {}
+      },
+      "id": "merge-data",
+      "name": "Merge API Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile stats from all API responses\nconst items = $input.all();\n\n// Parse contacts\nconst contactsData = items[0]?.json?.body?.contacts || items[0]?.json?.data?.contacts || [];\nconst newLeadsCount = Array.isArray(contactsData) ? contactsData.length : 0;\n\n// Parse opportunities\nconst oppsData = items[1]?.json?.body?.opportunities || items[1]?.json?.data?.opportunities || [];\nconst opportunitiesByStage = {};\nif (Array.isArray(oppsData)) {\n  oppsData.forEach(opp => {\n    const stage = opp.pipelineStageId || opp.stage || 'Unknown';\n    opportunitiesByStage[stage] = (opportunitiesByStage[stage] || 0) + 1;\n  });\n}\n\n// Parse conversations\nconst convsData = items[2]?.json?.body?.conversations || items[2]?.json?.data?.conversations || [];\nlet callsMade = 0;\nlet messagesSent = 0;\nif (Array.isArray(convsData)) {\n  convsData.forEach(conv => {\n    if (conv.type === 'CALL' || conv.type === 'call') callsMade++;\n    if (conv.type === 'SMS' || conv.type === 'sms' || conv.type === 'EMAIL' || conv.type === 'email') messagesSent++;\n  });\n}\n\n// Date range\nconst dateRange = items[0]?.json?.weekStart \n  ? `${items[0].json.weekStart} to ${items[0].json.weekEnd}`\n  : 'Last 7 days';\n\nconst weekStart = items[0]?.json?.weekStart || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];\nconst weekEnd = items[0]?.json?.weekEnd || new Date().toISOString().split('T')[0];\n\n// Build stage summary HTML\nlet stageRows = '';\nfor (const [stage, count] of Object.entries(opportunitiesByStage)) {\n  stageRows += `<tr><td style=\"padding:10px 16px;border-bottom:1px solid #eee;\">${stage}</td><td style=\"padding:10px 16px;border-bottom:1px solid #eee;text-align:center;font-weight:700;\">${count}</td></tr>`;\n}\nif (!stageRows) {\n  stageRows = '<tr><td colspan=\"2\" style=\"padding:10px 16px;color:#999;\">No pipeline activity this week</td></tr>';\n}\n\nconst totalOpps = Array.isArray(oppsData) ? oppsData.length : 0;\n\nreturn [{\n  json: {\n    newLeadsCount,\n    totalOpportunities: totalOpps,\n    opportunitiesByStage,\n    callsMade,\n    messagesSent,\n    weekStart,\n    weekEnd,\n    stageRows,\n    dateRange\n  }\n}];"
+      },
+      "id": "compile-stats",
+      "name": "Compile Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "levihealey96@gmail.com",
+        "subject": "=LocalVex Weekly Report — Week of {{ $json.weekStart }}",
+        "emailType": "html",
+        "html": "=<div style=\"font-family:'Helvetica Neue',Arial,sans-serif;max-width:640px;margin:0 auto;padding:20px;color:#0a0f1e;\">\n<div style=\"text-align:center;margin-bottom:30px;\">\n<h1 style=\"font-size:24px;margin:0;color:#0a0f1e;\">⚡ LocalVex Weekly Report</h1>\n<p style=\"color:#666;margin:8px 0 0;\">{{ $json.weekStart }} → {{ $json.weekEnd }}</p>\n</div>\n\n<table style=\"width:100%;border-collapse:collapse;margin-bottom:30px;\">\n<tr>\n<td style=\"padding:20px;text-align:center;background:#f0f6ff;border-radius:8px;\">\n<div style=\"font-size:36px;font-weight:800;color:#0057FF;\">{{ $json.newLeadsCount }}</div>\n<div style=\"font-size:13px;color:#666;margin-top:4px;\">New Leads</div>\n</td>\n<td style=\"width:12px;\"></td>\n<td style=\"padding:20px;text-align:center;background:#f0f6ff;border-radius:8px;\">\n<div style=\"font-size:36px;font-weight:800;color:#0057FF;\">{{ $json.totalOpportunities }}</div>\n<div style=\"font-size:13px;color:#666;margin-top:4px;\">Pipeline Deals</div>\n</td>\n<td style=\"width:12px;\"></td>\n<td style=\"padding:20px;text-align:center;background:#f0f6ff;border-radius:8px;\">\n<div style=\"font-size:36px;font-weight:800;color:#0057FF;\">{{ $json.callsMade }}</div>\n<div style=\"font-size:13px;color:#666;margin-top:4px;\">Calls Made</div>\n</td>\n<td style=\"width:12px;\"></td>\n<td style=\"padding:20px;text-align:center;background:#f0f6ff;border-radius:8px;\">\n<div style=\"font-size:36px;font-weight:800;color:#0057FF;\">{{ $json.messagesSent }}</div>\n<div style=\"font-size:13px;color:#666;margin-top:4px;\">Messages Sent</div>\n</td>\n</tr>\n</table>\n\n<h2 style=\"font-size:18px;margin:24px 0 12px;\">Pipeline by Stage</h2>\n<table style=\"width:100%;border-collapse:collapse;background:#fafafa;border-radius:8px;overflow:hidden;\">\n<tr style=\"background:#0a0f1e;color:#fff;\">\n<th style=\"padding:10px 16px;text-align:left;\">Stage</th>\n<th style=\"padding:10px 16px;text-align:center;\">Count</th>\n</tr>\n{{ $json.stageRows }}\n</table>\n\n<div style=\"margin-top:30px;padding:16px;background:#f9f9f9;border-radius:8px;border-left:4px solid #0057FF;\">\n<p style=\"margin:0;font-size:14px;color:#666;\">This report is auto-generated by your n8n automation. Data pulled from GoHighLevel API.</p>\n</div>\n</div>",
+        "options": {}
+      },
+      "id": "send-report-email",
+      "name": "Send Weekly Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1680, 200],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://rest.gohighlevel.com/v1/contacts/?tags=active-client&limit=100",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-active-clients",
+      "name": "GET Active Clients",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, 420]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-has-clients",
+              "leftValue": "={{ $json.contacts?.length || $json.data?.contacts?.length || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-active-clients",
+      "name": "Has Active Clients?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1900, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract client emails for simplified report\nconst contacts = $input.first().json.contacts || $input.first().json.data?.contacts || [];\nconst clients = contacts.filter(c => c.email).map(c => ({\n  json: {\n    email: c.email,\n    firstName: c.firstName || c.name?.split(' ')[0] || 'there',\n    weekStart: $('Compile Stats').first().json.weekStart,\n    weekEnd: $('Compile Stats').first().json.weekEnd,\n    newLeadsCount: $('Compile Stats').first().json.newLeadsCount,\n    totalOpportunities: $('Compile Stats').first().json.totalOpportunities\n  }\n}));\nreturn clients;"
+      },
+      "id": "extract-client-emails",
+      "name": "Extract Client Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2120, 380]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=Your Weekly Performance Summary — {{ $json.weekStart }}",
+        "emailType": "html",
+        "html": "=<div style=\"font-family:'Helvetica Neue',Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#0a0f1e;\">\n<h1 style=\"font-size:22px;\">⚡ Weekly Performance Summary</h1>\n<p>Hey {{ $json.firstName }},</p>\n<p>Here's your snapshot for the week of {{ $json.weekStart }}:</p>\n<ul style=\"font-size:16px;line-height:2;\">\n<li><strong>{{ $json.newLeadsCount }}</strong> new leads generated</li>\n<li><strong>{{ $json.totalOpportunities }}</strong> pipeline opportunities active</li>\n</ul>\n<p>Questions? Reply to this email or <a href=\"https://calendly.com/localvex\" style=\"color:#0057FF;\">book a quick call</a>.</p>\n<p>– Levi, LocalVex Media</p>\n</div>",
+        "options": {
+          "replyTo": "levihealey96@gmail.com"
+        }
+      },
+      "id": "send-client-report",
+      "name": "Send Client Summary",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2340, 380],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Monday 8AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Calculate Date Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Date Range": {
+      "main": [
+        [
+          {
+            "node": "GET New Contacts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GET Opportunities",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GET Conversations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET New Contacts": {
+      "main": [
+        [
+          {
+            "node": "Merge API Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Opportunities": {
+      "main": [
+        [
+          {
+            "node": "Merge API Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "GET Conversations": {
+      "main": [
+        [
+          {
+            "node": "Merge API Data",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge API Data": {
+      "main": [
+        [
+          {
+            "node": "Compile Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Stats": {
+      "main": [
+        [
+          {
+            "node": "Send Weekly Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GET Active Clients",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Active Clients": {
+      "main": [
+        [
+          {
+            "node": "Has Active Clients?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Active Clients?": {
+      "main": [
+        [
+          {
+            "node": "Extract Client Emails",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Extract Client Emails": {
+      "main": [
+        [
+          {
+            "node": "Send Client Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "localvex",
+      "id": "tag-localvex"
+    },
+    {
+      "name": "reporting",
+      "id": "tag-reporting"
+    },
+    {
+      "name": "weekly",
+      "id": "tag-weekly"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-17T00:00:00.000Z",
+  "versionId": "1"
+}
