@@ -1,0 +1,295 @@
+{
+  "name": "New Contact → Welcome Email Sequence",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## New Contact → Welcome Email Sequence\n\n**What it does:**\nWhen a new contact is tagged \"new-lead\" in GoHighLevel, GHL fires a webhook to this workflow. It then sends a 3-email drip sequence over 3 days, then tags the contact \"sequence-complete\" in GHL.\n\n**Credentials to configure:**\n1. **SMTP Email** — Gmail App Password or Mailgun SMTP. Configure in n8n under Credentials → SMTP.\n2. **GHL API Key** — Paste into HTTP Request nodes' Authorization header.\n\n**Setup steps:**\n1. Import this workflow into n8n and activate it to get the webhook URL\n2. In GHL → Automations → Create Workflow:\n   - Trigger: \"Contact Tag Added\" = \"new-lead\"\n   - Action: Webhook → POST to this workflow's URL\n   - Body: {contactId, firstName, email, phone, source}\n3. Replace `{{GHL_API_KEY}}` with your actual GHL API key\n4. Configure SMTP credentials in n8n (Settings → Credentials → SMTP)\n5. Update the \"from\" email address in Send Email nodes\n6. Test by manually tagging a test contact with \"new-lead\" in GHL",
+        "height": 400,
+        "width": 420,
+        "color": 4
+      },
+      "id": "notes-node",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [40, 40]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "welcome-sequence",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "GHL New Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [520, 300],
+      "webhookId": "welcome-sequence"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "field-contact-id",
+              "name": "contactId",
+              "value": "={{ $json.body.contactId }}",
+              "type": "string"
+            },
+            {
+              "id": "field-first-name",
+              "name": "firstName",
+              "value": "={{ $json.body.firstName || 'there' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-email",
+              "name": "email",
+              "value": "={{ $json.body.email }}",
+              "type": "string"
+            },
+            {
+              "id": "field-phone",
+              "name": "phone",
+              "value": "={{ $json.body.phone || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-source",
+              "name": "source",
+              "value": "={{ $json.body.source || 'direct' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-contact-data",
+      "name": "Set Contact Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=Quick question, {{ $json.firstName }}",
+        "emailType": "html",
+        "html": "=<div style=\"font-family:'Helvetica Neue',Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#0a0f1e;\">\n<p style=\"font-size:17px;line-height:1.7;\">Hey {{ $json.firstName }},</p>\n<p style=\"font-size:17px;line-height:1.7;\">Just saw you came through — what's the #1 thing slowing your business down right now?</p>\n<p style=\"font-size:17px;line-height:1.7;\">Reply and let me know.</p>\n<p style=\"font-size:17px;line-height:1.7;\">– Levi<br><span style=\"color:#666;font-size:14px;\">LocalVex Media</span></p>\n</div>",
+        "options": {
+          "replyTo": "levihealey96@gmail.com"
+        }
+      },
+      "id": "send-email-1",
+      "name": "Email #1 — Quick Question",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [960, 300],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "days"
+      },
+      "id": "wait-1-day",
+      "name": "Wait 1 Day",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1180, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Set Contact Data').item.json.email }}",
+        "subject": "47 hours. Gone.",
+        "emailType": "html",
+        "html": "=<div style=\"font-family:'Helvetica Neue',Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#0a0f1e;\">\n<p style=\"font-size:17px;line-height:1.7;\">Most Cincinnati business owners spend 47 hours/week on tasks that should be automated.</p>\n<p style=\"font-size:17px;line-height:1.7;\">Follow-ups. Scheduling. Reviews.</p>\n<p style=\"font-size:17px;line-height:1.7;\">Sound familiar?</p>\n<p style=\"font-size:17px;line-height:1.7;\">Here's what we do about it: <a href=\"https://localvex.com\" style=\"color:#0057FF;\">localvex.com</a></p>\n<p style=\"font-size:17px;line-height:1.7;\">Book a free 30-min call and I'll show you exactly which 3 tasks to automate first:</p>\n<p style=\"text-align:center;margin:30px 0;\">\n<a href=\"https://calendly.com/localvex\" style=\"background:#0057FF;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:16px;\">Book Your Free Call →</a>\n</p>\n<p style=\"font-size:17px;line-height:1.7;\">– Levi<br><span style=\"color:#666;font-size:14px;\">LocalVex Media</span></p>\n</div>",
+        "options": {
+          "replyTo": "levihealey96@gmail.com"
+        }
+      },
+      "id": "send-email-2",
+      "name": "Email #2 — 47 Hours",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1400, 300],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "days"
+      },
+      "id": "wait-2-days",
+      "name": "Wait 2 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1620, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Set Contact Data').item.json.email }}",
+        "subject": "Last one from me",
+        "emailType": "html",
+        "html": "=<div style=\"font-family:'Helvetica Neue',Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#0a0f1e;\">\n<p style=\"font-size:17px;line-height:1.7;\">I won't keep flooding your inbox.</p>\n<p style=\"font-size:17px;line-height:1.7;\">But before I go — {{ $('Set Contact Data').item.json.firstName }}, if you're leaving leads on the table because you can't follow up fast enough, that's a fixable problem.</p>\n<p style=\"font-size:17px;line-height:1.7;\">15 minutes on a call and I'll prove it.</p>\n<p style=\"text-align:center;margin:30px 0;\">\n<a href=\"https://calendly.com/localvex\" style=\"background:#0057FF;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:16px;\">Book 15 Minutes →</a>\n</p>\n<p style=\"font-size:17px;line-height:1.7;\">– Levi<br><span style=\"color:#666;font-size:14px;\">LocalVex Media</span></p>\n</div>",
+        "options": {
+          "replyTo": "levihealey96@gmail.com"
+        }
+      },
+      "id": "send-email-3",
+      "name": "Email #3 — Last One",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1840, 300],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://rest.gohighlevel.com/v1/contacts/{{ $('Set Contact Data').item.json.contactId }}/tags/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GHL_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"tags\": [\"sequence-complete\"]\n}",
+        "options": {}
+      },
+      "id": "tag-sequence-complete",
+      "name": "Tag Sequence Complete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2060, 300]
+    }
+  ],
+  "connections": {
+    "GHL New Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Set Contact Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Contact Data": {
+      "main": [
+        [
+          {
+            "node": "Email #1 — Quick Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email #1 — Quick Question": {
+      "main": [
+        [
+          {
+            "node": "Wait 1 Day",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1 Day": {
+      "main": [
+        [
+          {
+            "node": "Email #2 — 47 Hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email #2 — 47 Hours": {
+      "main": [
+        [
+          {
+            "node": "Wait 2 Days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2 Days": {
+      "main": [
+        [
+          {
+            "node": "Email #3 — Last One",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email #3 — Last One": {
+      "main": [
+        [
+          {
+            "node": "Tag Sequence Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "localvex",
+      "id": "tag-localvex"
+    },
+    {
+      "name": "email-sequence",
+      "id": "tag-email-seq"
+    },
+    {
+      "name": "nurture",
+      "id": "tag-nurture"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-17T00:00:00.000Z",
+  "versionId": "1"
+}
